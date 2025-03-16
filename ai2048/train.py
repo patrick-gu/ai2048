@@ -74,41 +74,23 @@ def train_iteration(
     # the value function
     advantage_estimates = [r - v for r, v in zip(rewards_to_go, values)]
 
-    count = len(game_states)
-
     # improve policy
 
     policy.train(True)
 
-    total_policy_loss = torch.Tensor([0.0])
-    for (
-        state,
-        action,
-        action_idx,
-        probability,
-        reward,
-        advantage_estimate,
-        valid_actions,
-    ) in zip(
-        game_states,
-        actions,
-        action_idxs,
-        probabilities,
-        rewards,
-        advantage_estimates,
-        valid_moves,
-    ):
-        policy_output = policy(state)
-        valid_probs = torch.softmax(policy_output[valid_actions], 0)
-        new_probability = valid_probs[action_idx]
+    states = torch.stack(game_states)
+    probabilities = torch.tensor(probabilities)
+    advantage_estimates = torch.tensor(advantage_estimates)
 
-        ratio = new_probability / probability
-        clipped_ratio = torch.clamp(ratio, 1 - eps, 1 + eps)
-        policy_loss = -torch.min(
-            ratio * advantage_estimate, clipped_ratio * advantage_estimate
-        )
-        total_policy_loss += policy_loss
-    total_policy_loss /= count
+    policy_outputs = policy(states)
+    valid_probs = [torch.softmax(policy_outputs[i][valid_moves[i]], 0) for i in range(len(valid_moves))]
+    new_probabilities = torch.stack([valid_probs[i][action_idxs[i]] for i in range(len(action_idxs))])
+
+    ratios = new_probabilities / probabilities
+    clipped_ratios = torch.clamp(ratios, 1 - eps, 1 + eps)
+    policy_losses = -torch.min(ratios * advantage_estimates, clipped_ratios * advantage_estimates)
+
+    total_policy_loss = policy_losses.mean()
 
     policy_optimizer.zero_grad()
     total_policy_loss.backward()
@@ -121,12 +103,9 @@ def train_iteration(
 
     value.train(True)
 
-    total_value_loss = torch.Tensor([0.0])
-    for state, reward in zip(game_states, rewards_to_go):
-        # value loss
-        value_loss = (value(state) - reward) ** 2
-        total_value_loss += value_loss
-    total_value_loss /= count
+    value_outputs = value(states).squeeze()
+    rewards_to_go_tensor = torch.tensor(rewards_to_go)
+    total_value_loss = torch.nn.functional.mse_loss(value_outputs, rewards_to_go_tensor)
 
     value_optimizer.zero_grad()
     total_value_loss.backward()
@@ -135,7 +114,7 @@ def train_iteration(
 
     value.train(False)
 
-    return count
+    return len(game_states)
 
 
 def train(
