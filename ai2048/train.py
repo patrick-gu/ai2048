@@ -36,6 +36,8 @@ def train_iteration(
 
     eps = 0.2
     max_grad_norm = 1.0
+    discount = 0.99
+    gae_decay = 0.95
 
     game = Game()
     game_states = []
@@ -63,24 +65,31 @@ def train_iteration(
 
         # reward of 1 just for making any move
         rewards.append(1.0)
-        # we'll take the value of a state as a measure of the maximum number of
-        # moves we can make starting from the state
-        values.append(value(state).item())
 
     rewards_to_go = postfix_sum(rewards)
+    states = torch.stack(game_states)
 
-    # check if this is right?
-    # advantage estimate is difference between what we were able to achieve and
-    # the value function
-    advantage_estimates = [r - v for r, v in zip(rewards_to_go, values)]
+    # we'll take the value of a state as a measure of the maximum number of
+    # moves we can make starting from the state
+    values = value(states).squeeze()
+
+    # compute the TD residuals using tensor arithmetic
+    rewards_tensor = torch.tensor(rewards)
+    td_residuals = rewards_tensor + torch.cat((discount * values[1:], torch.tensor([0.0]))) - values
+    # compute the advantage estimates using GAE (Generalized Advantage Estimation)
+    advantage_estimates = []
+    advantage = 0.0
+    for t in reversed(range(len(rewards))):
+        delta = td_residuals[t]
+        advantage = delta + discount * gae_decay * advantage
+        advantage_estimates.insert(0, advantage)
+    advantage_estimates = torch.tensor(advantage_estimates)
 
     # improve policy
 
     policy.train(True)
 
-    states = torch.stack(game_states)
     probabilities = torch.tensor(probabilities)
-    advantage_estimates = torch.tensor(advantage_estimates)
 
     policy_outputs = policy(states)
     valid_probs = [torch.softmax(policy_outputs[i][valid_moves[i]], 0) for i in range(len(valid_moves))]
@@ -103,9 +112,8 @@ def train_iteration(
 
     value.train(True)
 
-    value_outputs = value(states).squeeze()
     rewards_to_go_tensor = torch.tensor(rewards_to_go)
-    total_value_loss = torch.nn.functional.mse_loss(value_outputs, rewards_to_go_tensor)
+    total_value_loss = torch.nn.functional.mse_loss(values, rewards_to_go_tensor)
 
     value_optimizer.zero_grad()
     total_value_loss.backward()
