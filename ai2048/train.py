@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+import statistics
 
 import matplotlib.pyplot as plt
 import torch
@@ -17,14 +18,55 @@ def serialize_game(game: Game) -> torch.Tensor:
     return torch.log2(flat)
 
 
-def postfix_sum(arr):
-    """Compute the postfix sum of an array."""
+@dataclass
+class GameResult:
+    states: list[torch.Tensor]
+    valid_actions: list[list[int]]
+    action_idxs: list[int]
+    probabilities: list[float]
+    rewards: list[float]
 
-    postfix = [0] * len(arr)
-    postfix[-1] = arr[-1]
-    for i in range(len(arr) - 2, -1, -1):
-        postfix[i] = postfix[i + 1] + arr[i]
-    return postfix
+
+def play_games(policy: Policy) -> list[GameResult]:
+    not_done = [
+        (
+            Game(),
+            GameResult(
+                states=[],
+                valid_actions=[],
+                action_idxs=[],
+                probabilities=[],
+                rewards=[],
+            ),
+        )
+        for _ in range(16)
+    ]
+    done = []
+
+    while not_done != []:
+        states = torch.stack([serialize_game(game) for game, _ in not_done])
+        policy_outputs = policy(states)
+        for state, policy_output, (game, result) in zip(
+            states, policy_outputs, not_done
+        ):
+            valid_actions_list = [i for i in range(4) if game.valid(i)]
+            valid_probs = torch.softmax(policy_output[valid_actions_list], 0)
+            action_idx = torch.multinomial(valid_probs, 1).item()
+            action = valid_actions_list[action_idx]
+
+            game.move(action)
+
+            result.states.append(state)
+            result.valid_actions.append(valid_actions_list)
+            result.action_idxs.append(action_idx)
+            result.probabilities.append(valid_probs[action_idx])
+            # reward of 1 just for making any move
+            result.rewards.append(1.0)
+
+        done.extend([result for game, result in not_done if not game.alive()])
+        not_done = [(game, result) for game, result in not_done if game.alive()]
+
+    return done
 
 
 @dataclass
@@ -44,7 +86,46 @@ def flipped_cumsum(t: torch.Tensor, dim: int) -> torch.Tensor:
     return t.flip(dim).cumsum(dim).flip(dim)
 
 
-def play(policy: Policy, value: Value) -> Trajectory:
+def compute_trajectory(value: Value, result: GameResult) -> Trajectory:
+    discount = 0.99
+    gae_decay = 0.95
+
+    states = torch.stack(result.states)
+    probabilities = torch.tensor(result.probabilities)
+
+    # we'll take the value of a state as a measure of the maximum number of
+    # moves we can make starting from the state
+    values = value(states).squeeze()
+
+    # compute the TD residuals using tensor arithmetic
+    rewards_tensor = torch.tensor(result.rewards)
+    td_residuals = (
+        rewards_tensor
+        + torch.cat((discount * values[1:], torch.tensor([0.0])))
+        - values
+    )
+    # compute the advantage estimates using GAE (Generalized Advantage Estimation)
+    advantage_estimates = []
+    advantage = 0.0
+    for t in reversed(range(len(result.rewards))):
+        delta = td_residuals[t]
+        advantage = delta + discount * gae_decay * advantage
+        advantage_estimates.insert(0, advantage)
+    advantage_estimates = torch.tensor(advantage_estimates)
+
+    rewards_to_go = flipped_cumsum(rewards_tensor, 0)
+
+    return Trajectory(
+        states=states,
+        valid_actions=result.valid_actions,
+        action_idxs=result.action_idxs,
+        probabilities=probabilities,
+        advantage_estimates=advantage_estimates,
+        rewards_to_go=rewards_to_go,
+    )
+
+
+def produce_trajectory(policy: Policy, value: Value) -> Trajectory:
     discount = 0.99
     gae_decay = 0.95
 
@@ -71,7 +152,7 @@ def play(policy: Policy, value: Value) -> Trajectory:
         probabilities.append(valid_probs[action_idx])
         # reward of 1 just for making any move
         rewards.append(1.0)
-    
+
     states = torch.stack(states)
     probabilities = torch.tensor(probabilities)
 
@@ -81,7 +162,11 @@ def play(policy: Policy, value: Value) -> Trajectory:
 
     # compute the TD residuals using tensor arithmetic
     rewards_tensor = torch.tensor(rewards)
-    td_residuals = rewards_tensor + torch.cat((discount * values[1:], torch.tensor([0.0]))) - values
+    td_residuals = (
+        rewards_tensor
+        + torch.cat((discount * values[1:], torch.tensor([0.0])))
+        - values
+    )
     # compute the advantage estimates using GAE (Generalized Advantage Estimation)
     advantage_estimates = []
     advantage = 0.0
@@ -115,13 +200,15 @@ def train_iteration(
     max_grad_norm = 1.0
     step_count = 5
 
-    traj = play(policy, value)
-    states = traj.states
-    valid_actions = traj.valid_actions
-    action_idxs = traj.action_idxs
-    probabilities = traj.probabilities
-    advantage_estimates = traj.advantage_estimates
-    rewards_to_go = traj.rewards_to_go
+    games = play_games(policy)
+    trajs = [compute_trajectory(value, game) for game in games]
+
+    states = torch.cat([traj.states for traj in trajs])
+    valid_actions = [action for traj in trajs for action in traj.valid_actions]
+    action_idxs = [idx for traj in trajs for idx in traj.action_idxs]
+    probabilities = torch.cat([traj.probabilities for traj in trajs])
+    advantage_estimates = torch.cat([traj.advantage_estimates for traj in trajs])
+    rewards_to_go = torch.cat([traj.rewards_to_go for traj in trajs])
 
     # improve policy
 
@@ -129,12 +216,19 @@ def train_iteration(
 
     for _ in range(step_count):
         policy_outputs = policy(states)
-        valid_probs = [torch.softmax(policy_outputs[i][valid_actions[i]], 0) for i in range(len(valid_actions))]
-        new_probabilities = torch.stack([valid_probs[i][action_idxs[i]] for i in range(len(action_idxs))])
+        valid_probs = [
+            torch.softmax(policy_outputs[i][valid_actions[i]], 0)
+            for i in range(len(valid_actions))
+        ]
+        new_probabilities = torch.stack(
+            [valid_probs[i][action_idxs[i]] for i in range(len(action_idxs))]
+        )
 
         ratios = new_probabilities / probabilities
         clipped_ratios = torch.clamp(ratios, 1 - eps, 1 + eps)
-        policy_losses = -torch.min(ratios * advantage_estimates, clipped_ratios * advantage_estimates)
+        policy_losses = -torch.min(
+            ratios * advantage_estimates, clipped_ratios * advantage_estimates
+        )
 
         total_policy_loss = policy_losses.mean()
 
@@ -160,7 +254,7 @@ def train_iteration(
 
     value.train(False)
 
-    return len(states)
+    return statistics.mean([len(traj.states) for traj in trajs])
 
 
 def train(
