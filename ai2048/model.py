@@ -5,13 +5,13 @@ class Policy(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.network = nn.Sequential(
-            nn.Linear(4 * 4, 1024),
+            nn.Linear(4 * 4, 512),
             nn.ReLU(),
-            nn.Linear(1024, 1024),
+            nn.Linear(512, 512),
             nn.ReLU(),
-            nn.Linear(1024, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 4),
+            # nn.Linear(512, 512),
+            # nn.ReLU(),
+            nn.Linear(512, 4),
         )
 
     def forward(self, x):
@@ -22,13 +22,13 @@ class Value(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.network = nn.Sequential(
-            nn.Linear(4 * 4, 1024),
+            nn.Linear(4 * 4, 512),
             nn.ReLU(),
-            nn.Linear(1024, 1024),
+            nn.Linear(512, 512),
             nn.ReLU(),
-            nn.Linear(1024, 1024),
-            nn.ReLU(),
-            nn.Linear(1024, 1),
+            # nn.Linear(512, 512),
+            # nn.ReLU(),
+            nn.Linear(512, 1),
         )
 
     def forward(self, x):
