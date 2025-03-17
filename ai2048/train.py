@@ -273,11 +273,11 @@ def train(
 
     t = datetime.now().isoformat()
 
-    for i in range(100000):
+    for i in range(100001):
         # with torch.autograd.detect_anomaly():
         count = train_iteration(policy, value, policy_optimizer, value_optimizer)
 
-        if i % 2500 == 0:
+        if i % 500 == 0:
             torch.save(
                 {
                     "policy": policy.state_dict(),
