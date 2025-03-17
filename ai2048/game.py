@@ -68,7 +68,14 @@ class Game:
         return self.clone().move(direction)
 
     def alive(self) -> bool:
-        return any(0 in row for row in self.state)
+        if any(0 in row for row in self.state):
+            return True
+        for i in range(4):
+            for j in range(4):
+                if j < 3 and self.state[i][j] == self.state[i][j + 1]:
+                    return True
+                if i < 3 and self.state[i][j] == self.state[i + 1][j]:
+                    return True
 
     def display(self):
         for row in self.state:
