@@ -45,7 +45,7 @@ def play_games(policy: Policy) -> list[GameResult]:
 
     while not_done != []:
         states = torch.stack([serialize_game(game) for game, _ in not_done])
-        policy_outputs = policy(states)
+        policy_outputs = policy(states.to("mps")).to("cpu")
         for state, policy_output, (game, result) in zip(
             states, policy_outputs, not_done
         ):
@@ -95,7 +95,7 @@ def compute_trajectory(value: Value, result: GameResult) -> Trajectory:
 
     # we'll take the value of a state as a measure of the maximum number of
     # moves we can make starting from the state
-    values = value(states).squeeze()
+    values = value(states.to("mps")).to("cpu").squeeze()
 
     # compute the TD residuals using tensor arithmetic
     rewards_tensor = torch.tensor(result.rewards)
@@ -139,7 +139,7 @@ def produce_trajectory(policy: Policy, value: Value) -> Trajectory:
 
     while game.alive():
         state = serialize_game(game)
-        policy_output = policy(state)
+        policy_output = policy(state.to("mps")).to("cpu")
         valid_actions_list = [i for i in range(4) if game.valid(i)]
         valid_probs = torch.softmax(policy_output[valid_actions_list], 0)
         action_idx = torch.multinomial(valid_probs, 1).item()
@@ -158,7 +158,7 @@ def produce_trajectory(policy: Policy, value: Value) -> Trajectory:
 
     # we'll take the value of a state as a measure of the maximum number of
     # moves we can make starting from the state
-    values = value(states).squeeze()
+    values = value(states.to("mps")).to("cpu").squeeze()
 
     # compute the TD residuals using tensor arithmetic
     rewards_tensor = torch.tensor(rewards)
@@ -215,7 +215,7 @@ def train_iteration(
     policy.train(True)
 
     for _ in range(step_count):
-        policy_outputs = policy(states)
+        policy_outputs = policy(states.to("mps")).to("cpu")
         valid_probs = [
             torch.softmax(policy_outputs[i][valid_actions[i]], 0)
             for i in range(len(valid_actions))
@@ -244,7 +244,7 @@ def train_iteration(
     value.train(True)
 
     for _ in range(step_count):
-        new_values = value(states).squeeze()
+        new_values = value(states.to("mps")).to("cpu").squeeze()
         total_value_loss = torch.nn.functional.mse_loss(new_values, rewards_to_go)
 
         value_optimizer.zero_grad()
