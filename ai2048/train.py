@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -26,48 +27,53 @@ def postfix_sum(arr):
     return postfix
 
 
-def train_iteration(
-    policy: Policy,
-    value: Value,
-    policy_optimizer: Optimizer,
-    value_optimizer: Optimizer,
-) -> float:
-    """Train the model with one iteration of PPO."""
+@dataclass
+class Trajectory:
+    states: torch.Tensor
 
-    eps = 0.2
-    max_grad_norm = 1.0
+    valid_actions: list[list[int]]
+    action_idxs: list[int]
+
+    probabilities: torch.Tensor
+    advantage_estimates: torch.Tensor
+
+    rewards_to_go: torch.Tensor
+
+
+def flipped_cumsum(t: torch.Tensor, dim: int) -> torch.Tensor:
+    return t.flip(dim).cumsum(dim).flip(dim)
+
+
+def play(policy: Policy, value: Value) -> Trajectory:
     discount = 0.99
     gae_decay = 0.95
 
     game = Game()
-    game_states = []
-    actions = []
-    valid_moves = []
+
+    states = []
+    valid_actions = []
     action_idxs = []
     probabilities = []
     rewards = []
-    values = []
 
     while game.alive():
         state = serialize_game(game)
         policy_output = policy(state)
-        valid_actions = [i for i in range(4) if game.valid(i)]
-        valid_probs = torch.softmax(policy_output[valid_actions], 0)
+        valid_actions_list = [i for i in range(4) if game.valid(i)]
+        valid_probs = torch.softmax(policy_output[valid_actions_list], 0)
         action_idx = torch.multinomial(valid_probs, 1).item()
-        action = valid_actions[action_idx]
+        action = valid_actions_list[action_idx]
         game.move(action)
 
-        valid_moves.append(valid_actions)
-        game_states.append(state)
-        actions.append(action)
+        states.append(state)
+        valid_actions.append(valid_actions_list)
         action_idxs.append(action_idx)
         probabilities.append(valid_probs[action_idx])
-
         # reward of 1 just for making any move
         rewards.append(1.0)
-
-    rewards_to_go = postfix_sum(rewards)
-    states = torch.stack(game_states)
+    
+    states = torch.stack(states)
+    probabilities = torch.tensor(probabilities)
 
     # we'll take the value of a state as a measure of the maximum number of
     # moves we can make starting from the state
@@ -85,26 +91,57 @@ def train_iteration(
         advantage_estimates.insert(0, advantage)
     advantage_estimates = torch.tensor(advantage_estimates)
 
+    rewards_to_go = flipped_cumsum(rewards_tensor, 0)
+
+    return Trajectory(
+        states=states,
+        valid_actions=valid_actions,
+        action_idxs=action_idxs,
+        probabilities=probabilities,
+        advantage_estimates=advantage_estimates,
+        rewards_to_go=rewards_to_go,
+    )
+
+
+def train_iteration(
+    policy: Policy,
+    value: Value,
+    policy_optimizer: Optimizer,
+    value_optimizer: Optimizer,
+) -> float:
+    """Train the model with one iteration of PPO."""
+
+    eps = 0.2
+    max_grad_norm = 1.0
+    step_count = 5
+
+    traj = play(policy, value)
+    states = traj.states
+    valid_actions = traj.valid_actions
+    action_idxs = traj.action_idxs
+    probabilities = traj.probabilities
+    advantage_estimates = traj.advantage_estimates
+    rewards_to_go = traj.rewards_to_go
+
     # improve policy
 
     policy.train(True)
 
-    probabilities = torch.tensor(probabilities)
+    for _ in range(step_count):
+        policy_outputs = policy(states)
+        valid_probs = [torch.softmax(policy_outputs[i][valid_actions[i]], 0) for i in range(len(valid_actions))]
+        new_probabilities = torch.stack([valid_probs[i][action_idxs[i]] for i in range(len(action_idxs))])
 
-    policy_outputs = policy(states)
-    valid_probs = [torch.softmax(policy_outputs[i][valid_moves[i]], 0) for i in range(len(valid_moves))]
-    new_probabilities = torch.stack([valid_probs[i][action_idxs[i]] for i in range(len(action_idxs))])
+        ratios = new_probabilities / probabilities
+        clipped_ratios = torch.clamp(ratios, 1 - eps, 1 + eps)
+        policy_losses = -torch.min(ratios * advantage_estimates, clipped_ratios * advantage_estimates)
 
-    ratios = new_probabilities / probabilities
-    clipped_ratios = torch.clamp(ratios, 1 - eps, 1 + eps)
-    policy_losses = -torch.min(ratios * advantage_estimates, clipped_ratios * advantage_estimates)
+        total_policy_loss = policy_losses.mean()
 
-    total_policy_loss = policy_losses.mean()
-
-    policy_optimizer.zero_grad()
-    total_policy_loss.backward()
-    # nn_utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
-    policy_optimizer.step()
+        policy_optimizer.zero_grad()
+        total_policy_loss.backward()
+        # nn_utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
+        policy_optimizer.step()
 
     policy.train(False)
 
@@ -112,17 +149,18 @@ def train_iteration(
 
     value.train(True)
 
-    rewards_to_go_tensor = torch.tensor(rewards_to_go)
-    total_value_loss = torch.nn.functional.mse_loss(values, rewards_to_go_tensor)
+    for _ in range(step_count):
+        new_values = value(states).squeeze()
+        total_value_loss = torch.nn.functional.mse_loss(new_values, rewards_to_go)
 
-    value_optimizer.zero_grad()
-    total_value_loss.backward()
-    # nn_utils.clip_grad_norm_(value.parameters(), max_grad_norm)
-    value_optimizer.step()
+        value_optimizer.zero_grad()
+        total_value_loss.backward()
+        # nn_utils.clip_grad_norm_(value.parameters(), max_grad_norm)
+        value_optimizer.step()
 
     value.train(False)
 
-    return len(game_states)
+    return len(states)
 
 
 def train(
