@@ -8,13 +8,12 @@ from torch.optim import Adam
 
 from ai2048.game import Game
 from ai2048.model import Policy, Value
-from ai2048.train import serialize_game
 
 
 @st.cache_resource
 def get_policy():
     policy = Policy()
-    checkpoint = torch.load("./ckpt-2025-03-17T01:14:19.759393-16500.pt")
+    checkpoint = torch.load("./ckpt-2025-03-17T23:06:44.826040-2600.pt")
     policy.load_state_dict(checkpoint['policy'])
     return policy
 
@@ -23,11 +22,9 @@ def play_game():
     game = Game()
     states = [game.clone().state]
     while game.alive():
-        state = serialize_game(game)
-        policy_output = get_policy()(state)
-        valid_actions_list = [i for i in range(4) if game.valid(i)]
-        valid_probs = torch.softmax(policy_output[valid_actions_list], 0)
-        action = valid_actions_list[torch.multinomial(valid_probs, 1).item()]
+        valid_actions = torch.tensor([float(game.valid(i)) for i in range(4)])
+        policy_output = get_policy()(torch.tensor(game.state), valid_actions)
+        action = torch.multinomial(policy_output, 1).item()
         game.move(action)
         states.append(game.clone().state)
     return states
