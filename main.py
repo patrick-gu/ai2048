@@ -10,9 +10,9 @@ if __name__ == "__main__":
     value = Value()
     policy_optimizer = Adam(policy.parameters(), lr=1e-3)
     value_optimizer = Adam(value.parameters(), lr=1e-3)
-    mps_device = torch.device("mps")
-    policy.to(mps_device)
-    value.to(mps_device)
+    # mps_device = torch.device("mps")
+    # policy.to(mps_device)
+    # value.to(mps_device)
 
     # checkpoint = torch.load("./ckpt-0.pt")
     # policy.load_state_dict(checkpoint['policy'])
