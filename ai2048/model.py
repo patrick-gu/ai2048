@@ -6,11 +6,11 @@ class Policy(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.network = nn.Sequential(
-            nn.Linear(4 * 4, 512),
+            nn.Linear(4 * 4, 256),
             nn.ReLU(),
-            nn.Linear(512, 512),
+            nn.Linear(256, 256),
             nn.ReLU(),
-            nn.Linear(512, 4),
+            nn.Linear(256, 4),
         )
 
     def forward(self, board: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
@@ -31,11 +31,11 @@ class Value(nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.network = nn.Sequential(
-            nn.Linear(4 * 4, 512),
+            nn.Linear(4 * 4, 256),
             nn.ReLU(),
-            nn.Linear(512, 512),
+            nn.Linear(256, 256),
             nn.ReLU(),
-            nn.Linear(512, 1),
+            nn.Linear(256, 1),
         )
 
     def forward(self, board: torch.Tensor) -> torch.Tensor:
