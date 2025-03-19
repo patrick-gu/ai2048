@@ -130,7 +130,7 @@ def train_iteration(
 
     states = torch.cat([traj.states for traj in trajs])
     valid_actions = torch.cat([traj.valid_actions for traj in trajs])
-    actions = torch.cat([torch.tensor(traj.actions) for traj in trajs])
+    actions = torch.cat([traj.actions for traj in trajs])
     probabilities = torch.cat([traj.probabilities for traj in trajs])
     advantage_estimates = torch.cat([traj.advantage_estimates for traj in trajs])
     rewards_to_go = torch.cat([traj.rewards_to_go for traj in trajs])
